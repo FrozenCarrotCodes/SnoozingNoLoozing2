@@ -4,11 +4,13 @@ from discord.ext import commands
 import asyncio
 
 intents = discord.Intents.default()
+intents.message_content = True  # Ensure this is set to True
 intents.voice_states = True
 intents.guilds = True
-intents.members = True  # Required to get voice states of members
+intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
+
 
 scheduled_shutdown = None
 
