@@ -1,81 +1,73 @@
 import os
-import asyncio
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
-
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
+import asyncio
 
 intents = discord.Intents.default()
-intents.members = True
 intents.voice_states = True
-intents.message_content = True
+intents.guilds = True
+intents.members = True  # Required to get voice states of members
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command('help')  # Avoid conflict with default help
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-shutdown_task = None
+scheduled_shutdown = None
 
 @bot.event
 async def on_ready():
-    print(f"[DEBUG] Logged in as {bot.user.name} - {bot.user.id}")
-    print("[DEBUG] Bot is ready.")
+    print(f'Logged in as {bot.user}')
 
-@bot.command(name='shutdownvc')
-async def shutdown_vc(ctx, minutes: float = 60):
-    global shutdown_task
+@bot.command()
+async def shutdownvc(ctx, minutes: int = 60):
+    global scheduled_shutdown
 
-    if shutdown_task and not shutdown_task.done():
-        await ctx.send("A shutdown is already scheduled. Use `!cancelshutdown` to cancel it.")
+    if scheduled_shutdown is not None and not scheduled_shutdown.done():
+        await ctx.send("A shutdown is already scheduled. Use !cancelshutdown to cancel it first.")
         return
 
-    delay = minutes * 60
-    await ctx.send(f"Voice channel shutdown scheduled in {minutes} minute(s).")
-    print(f"[DEBUG] Shutdown scheduled in {minutes} minute(s).")
+    async def kick_users_after_delay():
+        await ctx.send(f"Voice shutdown scheduled in {minutes} minutes.")
+        print(f"[DEBUG] Shutdown scheduled in {minutes} minutes.")
+        await asyncio.sleep(minutes * 60)
 
-    async def shutdown():
-        await asyncio.sleep(delay)
         kicked_users = []
-        for guild in bot.guilds:
-            for vc in guild.voice_channels:
-                for member in vc.members:
-                    try:
-                        await member.move_to(None)
-                        kicked_users.append((member.name, vc.name))
-                        print(f"[DEBUG] Kicked {member.name} from {vc.name}")
-                    except Exception as e:
-                        print(f"[ERROR] Could not kick {member.name}: {e}")
+        for vc in ctx.guild.voice_channels:
+            for member in vc.members:
+                try:
+                    await member.move_to(None)
+                    kicked_users.append((member.display_name, vc.name))
+                    print(f"[DEBUG] Kicked {member.display_name} from {vc.name}")
+                except discord.Forbidden:
+                    print(f"[DEBUG] Failed to kick {member.display_name} from {vc.name} (Missing Permissions)")
 
         if kicked_users:
-            report = "**Voice Shutdown Complete.**\n"
-            report += "\n".join([f"🔇 Kicked `{user}` from `{channel}`" for user, channel in kicked_users])
+            report = "\n".join([f"Kicked {user} from {channel}" for user, channel in kicked_users])
+            await ctx.send(f"Shutdown complete. Users kicked:\n{report}")
         else:
-            report = "No users were in voice channels at shutdown time."
+            await ctx.send("Shutdown complete. No users were in voice channels.")
 
-        await ctx.send(report)
+    scheduled_shutdown = asyncio.create_task(kick_users_after_delay())
 
-    shutdown_task = asyncio.create_task(shutdown())
-
-@bot.command(name='cancelshutdown')
-async def cancel_shutdown(ctx):
-    global shutdown_task
-    if shutdown_task and not shutdown_task.done():
-        shutdown_task.cancel()
-        await ctx.send("Voice channel shutdown has been cancelled.")
-        print("[DEBUG] Shutdown cancelled.")
+@bot.command()
+async def cancelshutdown(ctx):
+    global scheduled_shutdown
+    if scheduled_shutdown is not None and not scheduled_shutdown.done():
+        scheduled_shutdown.cancel()
+        scheduled_shutdown = None
+        await ctx.send("Voice shutdown has been canceled.")
+        print("[DEBUG] Shutdown task canceled.")
     else:
         await ctx.send("No shutdown is currently scheduled.")
+        print("[DEBUG] No shutdown to cancel.")
 
-@bot.command(name='help')
-async def help_command(ctx):
-    help_text = (
-        "**SleepBot Commands:**\n"
-        "`!shutdownvc <minutes>` – Schedule a voice channel shutdown. Kicks all users from VCs after the given number of minutes.\n"
-        "`!cancelshutdown` – Cancel a scheduled voice channel shutdown.\n"
-        "`!help` – Show this help message."
-    )
-    await ctx.send(help_text)
-    print("[DEBUG] Help command invoked.")
+@bot.command(name='commands')
+async def list_commands(ctx):
+    cmds = [
+        "!shutdownvc [minutes] — Kicks all users from voice channels after the given number of minutes (default 60).",
+        "!cancelshutdown — Cancels the scheduled voice channel shutdown.",
+        "!commands — Shows this help message."
+    ]
+    await ctx.send("Available commands:\n" + "\n".join(cmds))
 
+# Bot startup using Railway-provided environment variable
+TOKEN = os.getenv("DISCORD_TOKEN")
 bot.run(TOKEN)
